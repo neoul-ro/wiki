@@ -131,6 +131,27 @@ function CNN_FEAR_GREED() {
   ];
 }
 
+function CNN_FEAR_GREED_VALUE(metric) {
+  const data = fetchCnnFearGreed_();
+  const fg = data.fear_and_greed;
+  const key = String(metric || 'score').toLowerCase();
+
+  const values = {
+    score: fg.score,
+    rating: fg.rating,
+    timestamp: fg.timestamp,
+    previous_close: fg.previous_close,
+    previous_1_week: fg.previous_1_week,
+    previous_1_month: fg.previous_1_month,
+    previous_1_year: fg.previous_1_year,
+  };
+
+  if (!(key in values)) {
+    throw new Error(`Unknown Fear & Greed metric: ${metric}`);
+  }
+  return values[key];
+}
+
 function CNN_FEAR_GREED_INDICATORS() {
   const data = fetchCnnFearGreed_();
   const keys = [
@@ -168,6 +189,16 @@ function CNN_FEAR_GREED_INDICATORS() {
 ```text
 =CNN_FEAR_GREED_INDICATORS()
 ```
+
+셀 하나에 값만 넣고 싶으면 아래처럼 쓴다.
+
+```text
+=CNN_FEAR_GREED_VALUE("score")
+=CNN_FEAR_GREED_VALUE("rating")
+=CNN_FEAR_GREED_VALUE("timestamp")
+```
+
+`=CNN_FEAR_GREED()`와 `=CNN_FEAR_GREED_INDICATORS()`는 여러 셀로 펼쳐지는 배열 결과를 반환한다. 수식을 넣은 셀의 오른쪽과 아래쪽이 비어 있어야 한다.
 
 ## 왜 이렇게 해야 하나
 
@@ -256,6 +287,7 @@ Custom function은 시트가 다시 계산될 때 갱신된다. 강제로 갱신
 - `CNN Reader response did not contain JSON`: Jina 응답 형식이 바뀌었거나 CNN endpoint 응답이 실패했다.
 - `Argument too large: value`: 원본 JSON 전체를 캐시하려 해서 생긴 오류다. historical data를 버리고 작은 객체만 캐시해야 한다.
 - `Cannot read properties of undefined`: CNN JSON 구조가 바뀌었다.
+- `배열 결과는 ... 데이터를 덮어쓰기 때문에 펼쳐지지 않습니다`: 수식이 여러 셀로 펼쳐져야 하는데 주변 셀에 값이 있다. 주변 셀을 비우거나 `CNN_FEAR_GREED_VALUE("score")`처럼 단일값 함수를 쓴다.
 - 시트에서 값이 늦게 바뀜: custom function 재계산이 아직 일어나지 않았다.
 - 너무 잦은 호출 실패: cache 시간을 늘리거나 trigger 방식으로 바꾼다.
 
