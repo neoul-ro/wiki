@@ -17,4 +17,3 @@ status: "published"
 |---|---|
 | [[git/_index\|Git]] | Git, GitHub, SSH 인증, remote 설정 |
 | [[finance/_index\|Finance]] | 시장 지표, 투자 데이터, 금융 데이터 자동화 |
-| [[web-infrastructure/_index\|Web Infrastructure]] | DNS, CDN, proxy, serverless, edge runtime |
