@@ -1,13 +1,13 @@
 ---
-title: "Google Sheets"
+title: "Finance"
 created: 2026-05-12
 updated: 2026-05-12
-tags: [index, google-sheets]
+tags: [index, finance]
 author: "neoul"
 status: "published"
 ---
 
-# Google Sheets
+# Finance
 
 ## Articles
 

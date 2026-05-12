@@ -160,4 +160,4 @@ Custom function은 시트가 다시 계산될 때 갱신된다. 강제로 갱신
 
 ## Related
 
-- [[google-sheets/_index|Google Sheets]]
+- [[finance/_index|Finance]]
