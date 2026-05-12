@@ -9,33 +9,56 @@ status: "published"
 
 # CNN Fear & Greed Index를 Google Sheets로 가져오기
 
-CNN Fear & Greed Index를 Google Sheets에서 쓰려면 `IMPORTDATA`보다 Apps Script로 JSON을 가져오는 방식이 안정적이다. CNN 페이지가 사용하는 공개 JSON 엔드포인트에서 현재 score, rating, 과거 비교값, 7개 하위 지표를 받을 수 있고, Sheets에서는 custom function으로 표 형태를 반환하면 된다.
+CNN Fear & Greed Index를 Google Sheets에서 쓰려면 CNN 엔드포인트를 시트에서 직접 호출하지 말고, 얇은 proxy를 하나 둔 뒤 Google Sheets는 그 proxy를 호출하게 만드는 편이 안정적이다. CNN이 Google Apps Script 요청을 bot으로 판단하면 `CNN request failed: 418`이 발생하기 때문이다.
 
 ## 결론
 
-Google Sheets에서 `Extensions` → `Apps Script`를 열고 아래 코드를 붙여넣는다.
+먼저 Cloudflare Worker 같은 간단한 proxy를 만든다. Worker는 CNN JSON을 가져와 그대로 돌려주는 역할만 한다.
 
 ```javascript
-const CNN_FEAR_GREED_URL =
-  'https://production.dataviz.cnn.io/index/fearandgreed/graphdata';
+export default {
+  async fetch() {
+    const response = await fetch(
+      'https://production.dataviz.cnn.io/index/fearandgreed/graphdata',
+      {
+        headers: {
+          Accept: 'application/json',
+          Referer: 'https://edition.cnn.com/markets/fear-and-greed',
+          'User-Agent':
+            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
+        },
+      },
+    );
+
+    return new Response(await response.text(), {
+      status: response.status,
+      headers: {
+        'content-type': 'application/json; charset=utf-8',
+        'cache-control': 'public, max-age=300',
+      },
+    });
+  },
+};
+```
+
+Worker를 배포한 뒤, Google Sheets에서 `Extensions` → `Apps Script`를 열고 아래 코드를 붙여넣는다. `CNN_FEAR_GREED_PROXY_URL`은 본인의 Worker URL로 바꾼다.
+
+```javascript
+const CNN_FEAR_GREED_PROXY_URL =
+  'https://YOUR_WORKER.YOUR_SUBDOMAIN.workers.dev';
 
 function fetchCnnFearGreed_() {
   const cache = CacheService.getScriptCache();
   const cached = cache.get('cnn_fear_greed');
   if (cached) return JSON.parse(cached);
 
-  const response = UrlFetchApp.fetch(CNN_FEAR_GREED_URL, {
+  const response = UrlFetchApp.fetch(CNN_FEAR_GREED_PROXY_URL, {
     muteHttpExceptions: true,
-    headers: {
-      Accept: 'application/json',
-      Referer: 'https://edition.cnn.com/',
-      'User-Agent': 'Mozilla/5.0',
-    },
   });
 
   const status = response.getResponseCode();
   if (status !== 200) {
-    throw new Error(`CNN request failed: ${status}`);
+    throw new Error(`CNN proxy request failed: ${status}`);
   }
 
   const data = JSON.parse(response.getContentText());
@@ -97,11 +120,17 @@ function CNN_FEAR_GREED_INDICATORS() {
 =CNN_FEAR_GREED_INDICATORS()
 ```
 
-## 왜 IMPORTDATA가 아니라 Apps Script인가
+## 왜 proxy가 필요한가
 
-CNN Fear & Greed 데이터는 CSV가 아니라 JSON이다. Google Sheets의 기본 함수만으로 JSON 내부 필드를 안정적으로 뽑기 어렵기 때문에 Apps Script에서 `UrlFetchApp.fetch()`로 JSON을 가져오고, 필요한 필드만 2차원 배열로 반환하는 편이 낫다.
+CNN Fear & Greed 데이터는 CSV가 아니라 JSON이다. Google Sheets의 기본 함수만으로 JSON 내부 필드를 안정적으로 뽑기 어렵기 때문에 Apps Script에서 JSON을 가져오고, 필요한 필드만 2차원 배열로 반환하는 편이 낫다.
 
-또한 CNN 엔드포인트는 일반 브라우저 요청을 기대할 수 있다. 그래서 Apps Script 요청에 `Accept`, `Referer`, `User-Agent` header를 넣어두면 실패 가능성을 줄일 수 있다.
+문제는 Google Apps Script가 CNN 엔드포인트를 직접 호출하면 CNN이 요청을 bot으로 판단할 수 있다는 점이다. 이때 다음 오류가 난다.
+
+```text
+Error: CNN request failed: 418
+```
+
+`418`은 Google Sheets 수식이나 JSON parsing 문제가 아니라 CNN 쪽 차단 응답이다. proxy를 두면 Sheets는 proxy만 호출하고, proxy가 CNN에 브라우저에 가까운 header로 요청한다.
 
 ## 가져오는 값
 
@@ -142,13 +171,15 @@ Custom function은 시트가 다시 계산될 때 갱신된다. 강제로 갱신
 자주 보는 문제는 다음과 같다.
 
 - `CNN request failed: 403`: CNN이 요청을 차단했거나 header가 부족하다.
+- `CNN request failed: 418`: Google Apps Script 직접 호출이 CNN에 막힌 것이다. proxy 방식으로 바꾼다.
+- `CNN proxy request failed: 418`: proxy도 CNN에 막힌 것이다. Worker header를 확인하거나 다른 배포 위치를 쓴다.
 - `Cannot read properties of undefined`: CNN JSON 구조가 바뀌었다.
 - 시트에서 값이 늦게 바뀜: custom function 재계산이 아직 일어나지 않았다.
 - 너무 잦은 호출 실패: cache 시간을 늘리거나 trigger 방식으로 바꾼다.
 
 ## 주의할 점
 
-이 방식은 CNN의 공식 공개 API 계약에 의존하는 것이 아니라, CNN 페이지에서 사용하는 공개 JSON 응답에 의존한다. CNN이 엔드포인트나 JSON 구조를 바꾸면 스크립트를 수정해야 한다.
+이 방식은 CNN의 공식 공개 API 계약에 의존하는 것이 아니라, CNN 페이지에서 사용하는 공개 JSON 응답에 의존한다. CNN이 엔드포인트, 차단 정책, JSON 구조를 바꾸면 proxy나 스크립트를 수정해야 한다.
 
 투자 판단에는 단독으로 쓰지 말고, CNN이 설명하는 것처럼 시장 심리를 확인하는 보조 지표로만 사용한다.
 
