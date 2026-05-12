@@ -15,5 +15,6 @@ status: "published"
 
 | Category | Description |
 |---|---|
+| [[cloudflare/_index\|Cloudflare]] | Cloudflare Workers, proxy, edge automation |
 | [[git/_index\|Git]] | Git, GitHub, SSH 인증, remote 설정 |
 | [[finance/_index\|Finance]] | 시장 지표, 투자 데이터, 금융 데이터 자동화 |
