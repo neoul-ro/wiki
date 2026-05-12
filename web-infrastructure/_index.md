@@ -1,13 +1,13 @@
 ---
-title: "Cloudflare"
+title: "Web Infrastructure"
 created: 2026-05-12
 updated: 2026-05-12
-tags: [index, cloudflare]
+tags: [index, web-infrastructure]
 author: "neoul"
 status: "published"
 ---
 
-# Cloudflare
+# Web Infrastructure
 
 ## Articles
 
