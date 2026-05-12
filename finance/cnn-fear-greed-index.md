@@ -9,58 +9,65 @@ status: "published"
 
 # CNN Fear & Greed Index를 Google Sheets로 가져오기
 
-CNN Fear & Greed Index를 Google Sheets에서 쓰려면 CNN 엔드포인트를 시트에서 직접 호출하지 말고, 얇은 proxy를 하나 둔 뒤 Google Sheets는 그 proxy를 호출하게 만드는 편이 안정적이다. CNN이 Google Apps Script 요청을 bot으로 판단하면 `CNN request failed: 418`이 발생하기 때문이다.
+CNN Fear & Greed Index는 Google Sheets에서 바로 가져올 수 있다. 핵심은 CNN JSON endpoint를 곧바로 호출하지 않고, 먼저 CNN 페이지를 한 번 열어 쿠키를 받은 뒤 같은 쿠키와 브라우저 비슷한 header로 JSON endpoint를 다시 호출하는 것이다. 단순 `IMPORTXML`로 HTML을 긁는 방식은 숫자가 HTML에 직접 들어있지 않아 맞지 않는다.
 
 ## 결론
 
-먼저 Cloudflare Worker 같은 간단한 proxy를 만든다. Worker는 CNN JSON을 가져와 그대로 돌려주는 역할만 한다.
-
-Cloudflare Worker가 뭔지 모르겠다면 먼저 [[web-infrastructure/cloudflare-worker-proxy|Cloudflare Worker로 간단한 proxy 만들기]]를 읽고, Worker URL을 만든 뒤 이 글로 돌아온다.
+Google Sheets에서 `Extensions` → `Apps Script`를 열고 아래 코드를 붙여넣는다.
 
 ```javascript
-export default {
-  async fetch() {
-    const response = await fetch(
-      'https://production.dataviz.cnn.io/index/fearandgreed/graphdata',
-      {
-        headers: {
-          Accept: 'application/json',
-          Referer: 'https://edition.cnn.com/markets/fear-and-greed',
-          'User-Agent':
-            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
-        },
-      },
-    );
+const CNN_FEAR_GREED_PAGE_URL =
+  'https://edition.cnn.com/markets/fear-and-greed';
+const CNN_FEAR_GREED_GRAPH_URL =
+  'https://production.dataviz.cnn.io/index/fearandgreed/graphdata';
 
-    return new Response(await response.text(), {
-      status: response.status,
-      headers: {
-        'content-type': 'application/json; charset=utf-8',
-        'cache-control': 'public, max-age=300',
-      },
-    });
-  },
-};
-```
+function cnnCookieHeader_(headers) {
+  const raw = headers['Set-Cookie'] || headers['set-cookie'];
+  if (!raw) return '';
 
-Worker를 배포한 뒤, Google Sheets에서 `Extensions` → `Apps Script`를 열고 아래 코드를 붙여넣는다. `CNN_FEAR_GREED_PROXY_URL`은 본인의 Worker URL로 바꾼다.
-
-```javascript
-const CNN_FEAR_GREED_PROXY_URL =
-  'https://YOUR_WORKER.YOUR_SUBDOMAIN.workers.dev';
+  const cookies = Array.isArray(raw) ? raw : [raw];
+  return cookies
+    .map((cookie) => cookie.split(';')[0])
+    .filter(Boolean)
+    .join('; ');
+}
 
 function fetchCnnFearGreed_() {
   const cache = CacheService.getScriptCache();
   const cached = cache.get('cnn_fear_greed');
   if (cached) return JSON.parse(cached);
 
-  const response = UrlFetchApp.fetch(CNN_FEAR_GREED_PROXY_URL, {
+  const pageResponse = UrlFetchApp.fetch(CNN_FEAR_GREED_PAGE_URL, {
     muteHttpExceptions: true,
+    followRedirects: true,
+    headers: {
+      Accept:
+        'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+      'User-Agent':
+        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
+    },
+  });
+
+  const cookieHeader = cnnCookieHeader_(pageResponse.getAllHeaders());
+  if (!cookieHeader) {
+    throw new Error('CNN page did not return cookies');
+  }
+
+  const response = UrlFetchApp.fetch(CNN_FEAR_GREED_GRAPH_URL, {
+    muteHttpExceptions: true,
+    headers: {
+      Accept: 'application/json,text/plain,*/*',
+      Referer: CNN_FEAR_GREED_PAGE_URL,
+      Origin: 'https://edition.cnn.com',
+      Cookie: cookieHeader,
+      'User-Agent':
+        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
+    },
   });
 
   const status = response.getResponseCode();
   if (status !== 200) {
-    throw new Error(`CNN proxy request failed: ${status}`);
+    throw new Error(`CNN request failed: ${status}`);
   }
 
   const data = JSON.parse(response.getContentText());
@@ -122,17 +129,38 @@ function CNN_FEAR_GREED_INDICATORS() {
 =CNN_FEAR_GREED_INDICATORS()
 ```
 
-## 왜 proxy가 필요한가
+## 왜 이렇게 해야 하나
 
-CNN Fear & Greed 데이터는 CSV가 아니라 JSON이다. Google Sheets의 기본 함수만으로 JSON 내부 필드를 안정적으로 뽑기 어렵기 때문에 Apps Script에서 JSON을 가져오고, 필요한 필드만 2차원 배열로 반환하는 편이 낫다.
+CNN Fear & Greed 페이지의 HTML에는 최종 숫자가 직접 들어있지 않다. HTML 안에는 데이터 위치만 들어있다.
 
-문제는 Google Apps Script가 CNN 엔드포인트를 직접 호출하면 CNN이 요청을 bot으로 판단할 수 있다는 점이다. 이때 다음 오류가 난다.
+```html
+data-data-url="https://production.dataviz.cnn.io/index/fearandgreed/graphdata"
+```
+
+그래서 `IMPORTXML`로 페이지를 파싱해도 현재 점수를 바로 얻기 어렵다.
+
+JSON endpoint만 직접 호출하면 CNN이 bot 요청으로 보고 다음처럼 막을 수 있다.
 
 ```text
 Error: CNN request failed: 418
 ```
 
-`418`은 Google Sheets 수식이나 JSON parsing 문제가 아니라 CNN 쪽 차단 응답이다. proxy를 두면 Sheets는 proxy만 호출하고, proxy가 CNN에 브라우저에 가까운 header로 요청한다.
+테스트해보면, 먼저 CNN 페이지를 요청해서 쿠키를 받은 뒤 같은 쿠키로 JSON endpoint를 호출하면 응답을 받을 수 있다.
+
+```bash
+curl -L -s -c /tmp/cnn-cookies.txt \
+  'https://edition.cnn.com/markets/fear-and-greed' \
+  -o /tmp/cnn-fng.html
+
+curl -s -b /tmp/cnn-cookies.txt \
+  -H 'Accept: application/json,text/plain,*/*' \
+  -H 'Referer: https://edition.cnn.com/markets/fear-and-greed' \
+  -H 'Origin: https://edition.cnn.com' \
+  -H 'User-Agent: Mozilla/5.0' \
+  'https://production.dataviz.cnn.io/index/fearandgreed/graphdata'
+```
+
+Apps Script 코드도 같은 흐름을 구현한다.
 
 ## 가져오는 값
 
@@ -173,11 +201,21 @@ Custom function은 시트가 다시 계산될 때 갱신된다. 강제로 갱신
 자주 보는 문제는 다음과 같다.
 
 - `CNN request failed: 403`: CNN이 요청을 차단했거나 header가 부족하다.
-- `CNN request failed: 418`: Google Apps Script 직접 호출이 CNN에 막힌 것이다. proxy 방식으로 바꾼다.
-- `CNN proxy request failed: 418`: proxy도 CNN에 막힌 것이다. Worker header를 확인하거나 다른 배포 위치를 쓴다.
+- `CNN request failed: 418`: 쿠키를 붙인 재요청도 CNN에 막힌 것이다. header를 확인하고, 계속 막히면 Worker proxy 방식으로 바꾼다.
+- `CNN page did not return cookies`: 첫 페이지 요청에서 쿠키를 받지 못했다. CNN URL, redirect, Apps Script 권한을 확인한다.
 - `Cannot read properties of undefined`: CNN JSON 구조가 바뀌었다.
 - 시트에서 값이 늦게 바뀜: custom function 재계산이 아직 일어나지 않았다.
 - 너무 잦은 호출 실패: cache 시간을 늘리거나 trigger 방식으로 바꾼다.
+
+## 그래도 막히면
+
+위 방식은 Worker 없이 Google Sheets 안에서 해결하는 방법이다. 그래도 계속 `418`이나 `403`이 나오면 Cloudflare Worker 같은 proxy를 중간에 둔다.
+
+```text
+Google Sheets → Worker proxy → CNN
+```
+
+proxy 방식은 [[web-infrastructure/cloudflare-worker-proxy|Cloudflare Worker로 간단한 proxy 만들기]]에 정리해 두었다.
 
 ## 주의할 점
 
